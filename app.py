@@ -448,242 +448,185 @@ def flatten_analysis_for_csv(analysis):
 
     return flattened
 
-# Main page title
-st.title("Resume Ranking System")
+# Streamlit page setup
+st.set_page_config(layout="wide")
+st.title("📄 Resume Analyzer")
 
-# API Key Verification Section
-st.header("🔐 API Key Verification")
-
-if not st.session_state.api_key_verified:
-    # Keep the API key input field enabled
-    api_key = st.text_input("Enter your OpenAI API Key", type="password")
-    
-    if st.button("Verify API Key"):
-        if api_key:
-            try:
-                # Try to create a client and make a simple API call
-                client = OpenAI(api_key=api_key)
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": "Test"}],
-                    max_tokens=5
-                )
-                # If no error, key is valid
-                st.session_state.api_key_verified = True
-                os.environ["OPENAI_API_KEY"] = api_key  # Set the API key
-                st.success("✅ API Key verified successfully!")
-                st.rerun()
-            except Exception as e:
-                st.error("❌ Invalid API Key. Please check and try again.")
+# --- JD Input ---
+with st.expander("📝 Job Description (Required)"):
+    st.session_state.jd_input = st.text_area("Paste the Job Description", height=300)
+    if st.button("Analyze JD"):
+        if st.session_state.jd_input:
+            st.session_state.requirements = analyze_job_description(st.session_state.jd_input, model="gpt-4")
+            st.success("✅ JD analyzed and stored in session.")
         else:
-            st.warning("⚠️ Please enter an API Key.")
-    
-    # Show the rest of the app but disable functionality
-    st.warning("⚠️ Please enter a valid API key to enable all features.")
-    st.divider()
-    
-    # Model Selection Section (disabled)
-    st.header("Model Selection")
-    st.selectbox(
-        "Choose the primary model (general purpose)",
-        ["gpt-4.1", "gpt-4.0", "gpt-3.5-turbo"],
-        disabled=True
-    )
-    st.selectbox(
-        "Choose a reasoning-focused model",
-        ["o4-mini", "o1-mini", "o1-preview"],
-        disabled=True
-    )
-    st.button("Update Models", disabled=True)
-    
-    st.divider()
-    
-    # Job Description Section (disabled)
-    st.header("Job Description Analysis")
-    st.text_area("Enter Job Description:", height=200, disabled=True)
-    st.button("Analyze Job Description", disabled=True)
-    
-    st.divider()
-    
-    # Resume Analysis Section (disabled)
-    st.header("Resume Analysis")
-    st.file_uploader("Upload Resumes (PDF, DOCX, or TXT)", 
-                    accept_multiple_files=True,
-                    disabled=True)
-    st.button("Analyze Resumes", disabled=True)
-    
-    st.stop()  # Stop here if not verified
+            st.error("Please paste a job description first.")
 
-# If verified, show the rest of the app
-st.success("✅ API Key verified and active")
-if st.button("Change API Key"):
-    st.session_state.api_key_verified = False
-    st.rerun()
+# Model selectors
+st.sidebar.title("Model Selection")
+st.session_state.selected_models = {
+    "primary": st.sidebar.selectbox("JD Analysis Model", ["gpt-4.1", "gpt-4"], index=0),
+    "reasoning": st.sidebar.selectbox("Resume Reasoning Model", ["o4-mini","gpt-4.1"], index=0),
+}
 
-st.divider()
+# Tabs for workflows
+tabs = st.tabs(["📁 Upload Resumes", "📊 Sheet-based Analysis"])
 
-# Model Selection Section
-st.header("Model Selection")
+# --- Tab 1: Manual Upload ---
+with tabs[0]:
+    st.header("📁 Resume Upload & Analysis")
+    if st.session_state.requirements is not None:
+        uploaded_files = st.file_uploader("Upload Resumes (PDF, DOCX, or TXT)", accept_multiple_files=True)
 
-model_1 = st.selectbox(
-    "Choose the primary model (general purpose)",
-    ["gpt-4.1", "gpt-4.0", "gpt-3.5-turbo"]
-)
-
-model_2 = st.selectbox(
-    "Choose a reasoning-focused model",
-    ["o4-mini", "o1-mini", "o1-preview"]
-)
-
-if st.button("Update Models"):
-    st.session_state.selected_models = {
-        "primary": model_1,
-        "reasoning": model_2
-    }
-    st.success("✅ Models updated successfully!")
-
-st.divider()
-
-# Job Description Section
-st.header("Job Description Analysis")
-
-# Keep job description input visible
-job_description = st.text_area("Enter Job Description:", 
-                          value=st.session_state.job_description if st.session_state.job_description else "",
-                          height=200)
-
-if st.button("Analyze Job Description"):
-    if not job_description:
-        st.error("Please provide a job description.")
-    else:
-        with st.spinner("Analyzing job description..."):
-            requirements = analyze_job_description(job_description, model=st.session_state.selected_models["primary"])
-            
-            if requirements:
-                st.session_state.job_description = job_description
-                formatted_reqs = format_requirements_for_editing(requirements)
-                st.session_state.formatted_reqs = formatted_reqs
-                st.session_state.requirements = requirements
-                st.success("✅ Job requirements have been extracted and saved!")
+        if uploaded_files and st.button("Analyze Resumes"):
+            if 'resume_results' not in st.session_state:
+                st.session_state.resume_results = []
+                st.session_state.csv_data = []
             else:
-                st.error("Failed to analyze job description. Please try again.")
+                st.session_state.resume_results = []
+                st.session_state.csv_data = []
 
-# Show requirements fields only if they exist
-if st.session_state.formatted_reqs:
-    st.subheader("Edit Requirements")
-    must_have_edit = st.text_area("Must-Have Requirements:", 
-                       value=st.session_state.formatted_reqs["must_have"],
-                       height=200)
-    preferred_edit = st.text_area("Preferred Requirements:", 
-                       value=st.session_state.formatted_reqs["preferred"],
-                       height=200)
-    additional_edit = st.text_area("Additional Screening Criteria:", 
-                        value=st.session_state.formatted_reqs["additional"],
-                        height=200)
-    
-    if st.button("Update Requirements"):
-        edited_requirements = parse_edited_requirements(must_have_edit, preferred_edit, additional_edit)
-        if edited_requirements:
-            edited_requirements["original_job_description"] = st.session_state.job_description
-            st.session_state.requirements = edited_requirements
-            st.session_state.formatted_reqs = format_requirements_for_editing(edited_requirements)
-            st.success("✅ Requirements updated successfully!")
-            st.rerun()
+            st.markdown("### 📊 Analyzing Resumes...")
+            progress_bar = st.progress(0)
+            total_files = len(uploaded_files)
+            results_section = st.container()
 
-st.divider()
+            for idx, file in enumerate(uploaded_files, 1):
+                with st.spinner(f"Analyzing {file.name}..."):
+                    resume_text = process_file(file)
+                    analysis = analyze_resume(resume_text, st.session_state.requirements, model=st.session_state.selected_models["reasoning"])
 
-# Resume Analysis Section
-if st.session_state.requirements is not None:
-    st.header("Resume Analysis")
-    uploaded_files = st.file_uploader("Upload Resumes (PDF, DOCX, or TXT)", 
-                                    accept_multiple_files=True)
-    
-    if uploaded_files and st.button("Analyze Resumes"):
-        # Initialize session state for results if not exists
-        if 'resume_results' not in st.session_state:
-            st.session_state.resume_results = []
-            st.session_state.csv_data = []
-        else:
-            # Clear previous results when starting new analysis
-            st.session_state.resume_results = []
-            st.session_state.csv_data = []
+                    if analysis:
+                        percentage = calculate_percentage(analysis['score'])
+                        result = {
+                            'filename': file.name,
+                            'percentage': percentage,
+                            'score': analysis['score'],
+                            'analysis': analysis['analysis']
+                        }
+                        st.session_state.resume_results.append(result)
+                        flattened_data = flatten_analysis_for_csv(analysis['analysis'])
+                        flattened_data['filename'] = file.name
+                        flattened_data['percentage'] = percentage
+                        st.session_state.csv_data.append(flattened_data)
+                        progress_bar.progress(idx / total_files)
+
+                        with results_section:
+                            with st.expander(f"{file.name} - {percentage}%", expanded=True):
+                                if 'contact_info' in analysis['analysis']:
+                                    st.write("📇 Contact Info", analysis['analysis']['contact_info'])
+                                st.write("📝 Summary", analysis['analysis']['qualitative_assessment'].get("recruiter_style_summary", "N/A"))
+                                st.write("✅ Final Recommendation", analysis['analysis']['final_recommendation'])
+
+            progress_bar.empty()
+            st.success("✅ All resumes processed!")
+            if st.session_state.csv_data:
+                df = pd.DataFrame(st.session_state.csv_data)
+                csv = df.to_csv(index=False)
+                st.download_button("📥 Download Results as CSV", data=csv, file_name="resume_analysis_results.csv", mime="text/csv")
+
+    else:
+        st.warning("Please analyze a Job Description first.")
+
+# --- Tab 2: Google Sheet Analysis ---
+with tabs[1]:
+    st.header("📊 Resume Analysis via Google Sheet")
+    # jd_text = st.text_area("Paste the Job Description", height=250)
+    sheet_url = st.text_input("Google Sheet URL")
+    resume_column_name = st.text_input("Column name with Resume Links", value="Resume")
+    trigger = st.button("Start Sheet-Based Resume Analysis")
+
+    if trigger:
+        if not st.session_state.jd_input or not sheet_url or not resume_column_name:
+            st.error("No JD given.")
+        # else:
+            # with st.spinner("Analyzing Job Description..."):
+                # requirements = analyze_job_description(st.session_state.requirements, model=st.session_state.selected_models["primary"])
+
+        if not st.session_state.requirements:
+            st.error("Running without JD")
         
-        # Create status section
-        st.markdown("### 📊 Analyzing Resumes...")
-        progress_bar = st.progress(0)
-        
-        total_files = len(uploaded_files)
-        
-        # Create one results section that will be updated
-        results_section = st.container()
-        
-        for idx, file in enumerate(uploaded_files, 1):
-            with st.spinner(f"Analyzing {file.name}..."):
-                resume_text = process_file(file)
-                analysis = analyze_resume(resume_text, st.session_state.requirements, model=st.session_state.selected_models["reasoning"])
-                
-                if analysis:
-                    # Calculate percentage score
-                    percentage = calculate_percentage(analysis['score'])
-                    
-                    # Store results
-                    result = {
-                        'filename': file.name,
-                        'percentage': percentage,
-                        'score': analysis['score'],
-                        'analysis': analysis['analysis']
-                    }
-                    st.session_state.resume_results.append(result)
-                    
-                    # Flatten and store data for CSV
-                    flattened_data = flatten_analysis_for_csv(analysis['analysis'])
-                    flattened_data['filename'] = file.name
-                    flattened_data['percentage'] = percentage
-                    st.session_state.csv_data.append(flattened_data)
-                    
-                    # Update progress
-                    progress_bar.progress(idx / total_files)
-                    
-                    # Display result in the single results section
-                    with results_section:
-                        with st.expander(f"{file.name} - {percentage}%", expanded=True):
-                            # Display contact information first
-                            if 'contact_info' in analysis['analysis']:
-                                display_contact_info(analysis['analysis']['contact_info'])
-                                st.divider()
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        import tempfile
+        import requests
+
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+        client = gspread.authorize(creds)
+
+        try:
+            worksheet = client.open_by_url(sheet_url).sheet1
+            rows = worksheet.get_all_records()
+
+            for i, row in enumerate(rows, start=2):
+                # Skip rows that already have a final decision
+                if row.get("Final Decision", "").strip():
+                    continue
+
+                link = row.get(resume_column_name, "").strip()
+                if not link:
+                    continue
+
+                st.write(f"Processing Row {i}...")
+
+                try:
+                    # Extract file ID from Google Drive link
+                    if "id=" in link:
+                        file_id = link.split("id=")[-1]
+                    elif "/d/" in link:
+                        file_id = link.split("/d/")[1].split("/")[0]
+                    else:
+                        raise ValueError("Invalid Drive Link")
+
+                    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                    r = requests.get(url)
+                    if r.status_code != 200:
+                        raise Exception("Download failed")
+
+                    temp_path = tempfile.mktemp(suffix=".pdf")
+                    with open(temp_path, "wb") as f:
+                        f.write(r.content)
+
+                    resume_text = extract_text_from_pdf(open(temp_path, "rb"))
+                    result = analyze_resume(resume_text, st.session_state.requirements, model=st.session_state.selected_models["reasoning"])
+
+                    if result:
+                        score = result["score"]
+                        if "requirement_match" in result['analysis']:
+                            recommendation = result["analysis"]["final_recommendation"]
+                            decision_summary = result["analysis"]["qualitative_assessment"].get("recruiter_style_summary", "N/A")
+                            skills_list = result["analysis"]["qualitative_assessment"].get("inferred_skills_from_projects", "N/A")
+                            skills = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
+                            resume_summary_list = result["analysis"]["summary_of_key_factors"]
+                            resume_summary = ", ".join(resume_summary_list) if isinstance(resume_summary_list, list) else str(resume_summary_list)
+
                             
-                            # Display requirements match
-                            display_simple_minimal_requirements(analysis['analysis'])
                             
-                            # Display other parts 
-                            st.divider() 
-                            display_qualitative_assessment(analysis['analysis']['qualitative_assessment'])
-                            
-                            # Display Recruiter Summary if available (without title)
-                            if 'qualitative_assessment' in analysis['analysis'] and 'recruiter_style_summary' in analysis['analysis']['qualitative_assessment']:
-                                st.write("")
-                                st.write(analysis['analysis']['qualitative_assessment']['recruiter_style_summary'])
-                                st.divider()
-                            
-                            st.subheader("Final Recommendation")
-                            st.write(analysis['analysis']['final_recommendation'])
-                            
-                            st.subheader("Reason for Recommendation") 
-                            for factor in analysis['analysis']['summary_of_key_factors']:
-                                st.write(f"- {factor}")
-                            st.divider()
-        
-        # Clear the progress bar and show completion
-        progress_bar.empty()
-        st.success("✅ All resumes processed!")
-        
-        # Show CSV download button after all processing is complete
-        if st.session_state.csv_data:
-            df = pd.DataFrame(st.session_state.csv_data)
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Complete Analysis Results as CSV",
-                data=csv,
-                file_name="resume_analysis_results.csv",
-                mime="text/csv",
-            )
+                        else:
+                            recommendation = "N/A"
+                            decision_summary = "N/A"
+                            resume_summary = ", ".join(result['analysis'].get("summary_of_key_factors", []))
+                            skills = ", ".join(result['analysis'].get("resume_analysis", {}).get("skills", []))
+                        col_map = worksheet.row_values(1)
+                        def col_num(name):
+                            return col_map.index(name) + 1 if name in col_map else len(col_map) + 1
+                        worksheet.update_cell(i, col_num("Score"), score)
+                        worksheet.update_cell(i, col_num("Final Decision"), recommendation)
+                        worksheet.update_cell(i, col_num("Decision Summary"), decision_summary)
+                        worksheet.update_cell(i, col_num("Resume Summary"), resume_summary)
+                        worksheet.update_cell(i, col_num("Skills"), skills)
+
+                        st.success(f"✅ Row {i} processed")
+
+                    else:
+                        worksheet.update_cell(i, len(row) + 1, "Analysis failed")
+                        st.error(f"❌ Row {i} analysis failed")
+
+                except Exception as e:
+                    st.error(f"⚠️ Error on row {i}: {e}")
+                    worksheet.update_cell(i, len(row) + 1, f"Error: {str(e)}")
+
+
+        except Exception as e:
+            st.error(f"Could not open sheet: {e}")

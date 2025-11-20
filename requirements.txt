@@ -6,3 +6,6 @@ python-docx
 pandas
 plotly
 streamlit-elements 
+gspread
+oauth2client
+requests
