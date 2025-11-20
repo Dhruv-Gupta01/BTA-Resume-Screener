@@ -5,6 +5,7 @@ from openai import OpenAI
 import PyPDF2
 import docx
 import pandas as pd
+import base64
 import json
 # Remove streamlit-elements import
 # from streamlit_elements import elements, mui
@@ -553,7 +554,10 @@ with tabs[1]:
 
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         # creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
-        service_account_info = json.loads(st.secrets["GOOGLE_SHEET_CREDENTIALS"])
+        # service_account_info = json.loads(st.secrets["GOOGLE_SHEET_CREDENTIALS"])
+        encoded = st.secrets["google_service_account"]
+        decoded_json = base64.b64decode(encoded).decode()
+        service_account_info = json.loads(decoded_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         client = gspread.authorize(creds)
 
