@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+import streamlit as st
 
 # Load environment variables
 load_dotenv()
@@ -23,7 +24,8 @@ def analyze_resume(resume_text, requirements=None, model="o4-mini"):
             - additional_screening_criteria
         model (str): The OpenAI model to use for analysis
     """
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    open_ai_key = st.secrets["openai-key"]
+    client = OpenAI(api_key=open_ai_key['OPENAI_API_KEY'])
     has_jd = requirements and any(k in requirements for k in [
         "original_job_description", "must_have_requirements", "good_to_have_requirements", "additional_screening_criteria"
     ])
