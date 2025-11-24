@@ -534,6 +534,8 @@ with tabs[1]:
     st.header("📊 Resume Analysis via Google Sheet")
     # jd_text = st.text_area("Paste the Job Description", height=250)
     sheet_url = st.text_input("Google Sheet URL")
+    worksheet_name = st.text_input("Enter worksheet name (case-sensitive)", value="Sheet1")
+
     resume_column_name = st.text_input("Column name with Resume Links", value="Resume")
     trigger = st.button("Start Sheet-Based Resume Analysis")
 
@@ -560,7 +562,8 @@ with tabs[1]:
         client = gspread.authorize(creds)
 
         try:
-            worksheet = client.open_by_url(sheet_url).sheet1
+            sheet = client.open_by_url(sheet_url)
+            worksheet = sheet.worksheet(worksheet_name)
             rows = worksheet.get_all_records()
 
             for i, row in enumerate(rows, start=2):
