@@ -554,10 +554,7 @@ with tabs[1]:
 
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         # creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
-        # service_account_info = json.loads(st.secrets["GOOGLE_SHEET_CREDENTIALS"])
-        encoded = st.secrets["google_service_account"]
-        decoded_json = base64.b64decode(encoded).decode()
-        service_account_info = json.loads(decoded_json)
+        service_account_info = json.loads(st.secrets["GOOGLE_SHEET_CREDENTIALS"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         client = gspread.authorize(creds)
 
