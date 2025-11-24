@@ -2,6 +2,8 @@ import json
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+import streamlit as st
+
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +17,8 @@ def analyze_job_description(job_description, model="gpt-4.1"):
         job_description (str): The job description text to analyze
         model (str): The OpenAI model to use for analysis
     """
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    open_ai_key = st.secrets["openai-key"]
+    client = OpenAI(api_key=open_ai_key['OPENAI_API_KEY'])
     try:
         response = client.chat.completions.create(
             model=model,
