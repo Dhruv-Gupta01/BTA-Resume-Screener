@@ -8,17 +8,19 @@ import streamlit as st
 # Load environment variables
 load_dotenv()
 
-def analyze_job_description(job_description, model="gpt-4.1"):
+GROQ_MODEL = "openai/gpt-oss-120b"
+
+def analyze_job_description(job_description, model=GROQ_MODEL):
     """
-    Analyzes a job description using GPT-4 and extracts structured requirements.
+    Analyzes a job description using an LLM and extracts structured requirements.
     Returns a dictionary with must-have, good-to-have, and additional screening criteria.
-    
+
     Args:
         job_description (str): The job description text to analyze
-        model (str): The OpenAI model to use for analysis
+        model (str): The Groq model id to use for analysis
     """
-    open_ai_key = st.secrets["openai-key"]
-    client = OpenAI(api_key=open_ai_key['OPENAI_API_KEY'])
+    groq_key = st.secrets["groq-key"]
+    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
     try:
         response = client.chat.completions.create(
             model=model,

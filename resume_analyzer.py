@@ -1,6 +1,6 @@
 import json
-from openai import OpenAI
-import os
+import time
+from openai import OpenAI, RateLimitError, APIStatusError
 from dotenv import load_dotenv
 import streamlit as st
 
@@ -10,11 +10,13 @@ load_dotenv()
 # Initialize OpenAI client
 
 
-def analyze_resume(resume_text, requirements=None, model="o4-mini"):
+GROQ_MODEL = "openai/gpt-oss-120b"
+
+def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
     """
     Analyzes a resume against the structured requirements from the JD analyzer.
     Returns a comprehensive analysis including quantitative matches and qualitative assessment.
-    
+
     Args:
         resume_text (str): The text content of the resume
         requirements (dict): The JSON output from the JD analyzer containing:
@@ -22,10 +24,10 @@ def analyze_resume(resume_text, requirements=None, model="o4-mini"):
             - must_have_requirements
             - good_to_have_requirements
             - additional_screening_criteria
-        model (str): The OpenAI model to use for analysis
+        model (str): The Fireworks model id to use for analysis
     """
-    open_ai_key = st.secrets["openai-key"]
-    client = OpenAI(api_key=open_ai_key['OPENAI_API_KEY'])
+    groq_key = st.secrets["groq-key"]
+    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
     has_jd = requirements and any(k in requirements for k in [
         "original_job_description", "must_have_requirements", "good_to_have_requirements", "additional_screening_criteria"
     ])
@@ -149,16 +151,15 @@ def analyze_resume(resume_text, requirements=None, model="o4-mini"):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="high",
-                store=False
+                reasoning_effort="high"
             )
-            
+
             # Parse the response into a dictionary
             analysis = json.loads(response.choices[0].message.content)
-            
+
             # Calculate score based on the analysis
             score = calculate_score(analysis)
-            
+
             return {
                 "score": score,
                 "analysis": analysis
@@ -232,16 +233,15 @@ def analyze_resume(resume_text, requirements=None, model="o4-mini"):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="high",
-                store=False
+                reasoning_effort="high"
             )
-            
+
             # Parse the response into a dictionary
             analysis = json.loads(response.choices[0].message.content)
-            
+
             # Calculate score based on the analysis
             score = calculate_score(analysis)
-            
+
             return {
                 "score": "",
                 "analysis": analysis
@@ -250,6 +250,130 @@ def analyze_resume(resume_text, requirements=None, model="o4-mini"):
     except Exception as e:
         print(f"Error in analyze_resume: {str(e)}")
         return None
+
+def analyze_resume_for_sheet(resume_text, job_description, model=GROQ_MODEL):
+    """
+    Single-call resume evaluator for the Google Sheet flow.
+    Given the raw JD text and a resume's text, extracts the candidate's
+    skills and strongest programming language, plus a short prose summary
+    and a 0-100 JD-fit score, in one flat JSON object suitable for writing
+    straight into spreadsheet columns.
+    Does NOT extract name/email/phone/experience - those are assumed to
+    already exist as manually-entered columns in the sheet.
+
+    Args:
+        resume_text (str): The text content of the resume
+        job_description (str): The raw job description text
+        model (str): The Groq model id to use for analysis
+
+    Returns:
+        dict with keys: skills, strongest_language, summary, score (int 0-100).
+        Returns None on failure.
+    """
+    groq_key = st.secrets["groq-key"]
+    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
+
+    max_retries = 4
+    retry_wait_seconds = 20  # grows each attempt: 20s, 40s, 60s, 80s
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a recruiter evaluating a resume against a job description.
+
+                        ## Task
+                        1. skills: a comma-separated list of the candidate's technical and relevant non-technical skills (explicit and reasonably inferred from their projects/roles).
+                        2. strongest_language: the ONE programming language the candidate has the most hands-on, production-level experience in, based solely on their resume (not the JD) - judge from depth/recency/volume of work shown, not just first-listed skill. A single language name (e.g. "Python"), or "" if none can be determined.
+                        3. Write a short recruiter-style summary (3-5 sentences, plain text, no markdown) covering the candidate's experience, key projects, and how well they fit the job description - mention concrete strengths and gaps relative to the JD.
+                        4. Score the candidate's overall fit against the job description on a 0-100 scale (0 = no fit, 100 = perfect fit), based on required skills, experience level, and responsibilities matched.
+
+                        ## Output Format (strictly follow this JSON structure, no extra text):
+                        {
+                          "skills": "Python, Django, REST APIs, PostgreSQL, AWS, Docker",
+                          "strongest_language": "Python",
+                          "summary": "The candidate has 4 years of backend engineering experience building REST APIs in Python/Django and deploying on AWS. They have led feature delivery end-to-end on production systems, which aligns well with the JD's need for backend ownership. They lack direct Kubernetes experience, which the JD lists as a plus. Overall a strong match for the core technical requirements.",
+                          "score": 78
+                        }
+
+                        If skills or strongest_language cannot be found, use an empty string (""), and still provide your best-effort score."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Extract the candidate's skills and strongest language, write a summary, and score the fit as per the system instructions.
+
+                        ## Job Description:
+                        {job_description}
+
+                        ## Resume:
+                        {resume_text}
+
+                        Output ONLY the JSON object as specified in the system prompt, with no additional text or formatting."""
+                    }
+                ],
+                response_format={
+                    "type": "json_object"
+                },
+                reasoning_effort="high",
+                max_completion_tokens=4096
+            )
+
+            record = json.loads(response.choices[0].message.content)
+
+            # The model doesn't always use the exact key names requested - fall
+            # back to common aliases before defaulting.
+            def pick(*keys, default=""):
+                for k in keys:
+                    if record.get(k) not in (None, ""):
+                        return record[k]
+                return default
+
+            # Skills sometimes come back as a list instead of a string - flatten.
+            def as_text(value, sep=", "):
+                if isinstance(value, list):
+                    return sep.join(str(v) for v in value)
+                return "" if value is None else str(value)
+
+            normalized = {
+                "skills": as_text(pick("skills", default="")),
+                "strongest_language": as_text(pick("strongest_language", "strongest_skill", default="")),
+                "summary": pick("summary", "recruiter_style_summary", "recruiter_summary"),
+            }
+
+            # Normalize score to an int 0-100
+            try:
+                normalized["score"] = max(0, min(100, int(round(float(record.get("score", 0))))))
+            except (TypeError, ValueError):
+                normalized["score"] = 0
+
+            return normalized
+
+        except (RateLimitError, APIStatusError) as e:
+            # Groq surfaces "tokens per minute" limits as either a 429
+            # (RateLimitError) or a 413 (plain APIStatusError) depending on
+            # whether the limit was hit before or after estimating the
+            # request - both are the same underlying rate limit, so both
+            # get the same retry/backoff treatment.
+            status_code = getattr(e, "status_code", None)
+            is_rate_limit = isinstance(e, RateLimitError) or status_code in (429, 413)
+
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = retry_wait_seconds * (attempt + 1)
+                print(f"Rate limited (status {status_code}), retrying in {wait}s (attempt {attempt + 1}/{max_retries}): {e}")
+                time.sleep(wait)
+            elif is_rate_limit:
+                print(f"Rate limited (status {status_code}), out of retries: {e}")
+                return None
+            else:
+                print(f"API error in analyze_resume_for_sheet: {e}")
+                return None
+
+        except Exception as e:
+            print(f"Error in analyze_resume_for_sheet: {str(e)}")
+            return None
 
 def calculate_score(analysis):
     """

@@ -10,7 +10,7 @@ import json
 # Remove streamlit-elements import
 # from streamlit_elements import elements, mui
 from jd_analyzer import analyze_job_description, format_requirements_for_display, parse_edited_requirements
-from resume_analyzer import analyze_resume
+from resume_analyzer import analyze_resume, analyze_resume_for_sheet
 # Load environment variables
 load_dotenv()
 
@@ -28,8 +28,9 @@ if "job_description" not in st.session_state:
     st.session_state.job_description = None
 if "formatted_reqs" not in st.session_state:
     st.session_state.formatted_reqs = None
+GROQ_MODEL = "openai/gpt-oss-120b"
 if "selected_models" not in st.session_state:
-    st.session_state.selected_models = {"primary": "gpt-4.1", "reasoning": "o4-mini"}
+    st.session_state.selected_models = {"primary": GROQ_MODEL, "reasoning": GROQ_MODEL}
 
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -458,17 +459,15 @@ with st.expander("📝 Job Description (Required)"):
     st.session_state.jd_input = st.text_area("Paste the Job Description", height=300)
     if st.button("Analyze JD"):
         if st.session_state.jd_input:
-            st.session_state.requirements = analyze_job_description(st.session_state.jd_input, model="gpt-4")
+            st.session_state.requirements = analyze_job_description(st.session_state.jd_input, model=st.session_state.selected_models["primary"])
             st.success("✅ JD analyzed and stored in session.")
         else:
             st.error("Please paste a job description first.")
 
-# Model selectors
-st.sidebar.title("Model Selection")
-st.session_state.selected_models = {
-    "primary": st.sidebar.selectbox("JD Analysis Model", ["gpt-4.1", "gpt-4"], index=0),
-    "reasoning": st.sidebar.selectbox("Resume Reasoning Model", ["o4-mini","gpt-4.1"], index=0),
-}
+# Model: single Groq model used for both JD analysis and resume evaluation
+st.sidebar.title("Model")
+st.sidebar.markdown(f"`{GROQ_MODEL}` (Groq)")
+st.session_state.selected_models = {"primary": GROQ_MODEL, "reasoning": GROQ_MODEL}
 
 # Tabs for workflows
 tabs = st.tabs(["📁 Upload Resumes", "📊 Sheet-based Analysis"])
@@ -532,31 +531,51 @@ with tabs[0]:
 # --- Tab 2: Google Sheet Analysis ---
 with tabs[1]:
     st.header("📊 Resume Analysis via Google Sheet")
-    # jd_text = st.text_area("Paste the Job Description", height=250)
+    st.caption("Reads resume links from the sheet, evaluates each resume against the JD above, and writes Skills / Summary / Score back into the sheet.")
     sheet_url = st.text_input("Google Sheet URL")
     worksheet_name = st.text_input("Enter worksheet name (case-sensitive)", value="Sheet1")
 
     resume_column_name = st.text_input("Column name with Resume Links", value="Resume")
+    delay_seconds = st.number_input(
+        "Delay between resumes (seconds)", min_value=0, max_value=120, value=20,
+        help="Groq's free tier has a tokens-per-minute limit. A short delay between calls avoids hitting it on longer batches."
+    )
     trigger = st.button("Start Sheet-Based Resume Analysis")
 
-    if trigger:
-        if not st.session_state.jd_input or not sheet_url or not resume_column_name:
-            st.error("No JD given.")
-        # else:
-            # with st.spinner("Analyzing Job Description..."):
-                # requirements = analyze_job_description(st.session_state.requirements, model=st.session_state.selected_models["primary"])
+    # Columns this flow writes results into (auto-created in the sheet if missing).
+    # Prefixed with "AI:" so results are visually distinct from manually-entered
+    # columns, and so reruns reuse these exact columns instead of duplicating them.
+    OUTPUT_COLUMNS = ["AI: Skills", "AI: Strongest Language", "AI: Summary", "AI: Score"]
 
-        if not st.session_state.requirements:
-            st.error("Running without JD")
-        
+    def get_or_create_col_map(worksheet, needed_columns):
+        """Return {column_name: 1-based col index}, appending any missing
+        needed_columns as new headers in row 1 so each gets its own column.
+        Expands the sheet's grid first if it doesn't have room for them."""
+        col_map = worksheet.row_values(1)
+        missing = [name for name in needed_columns if name not in col_map]
+
+        if missing:
+            needed_width = len(col_map) + len(missing)
+            if needed_width > worksheet.col_count:
+                worksheet.add_cols(needed_width - worksheet.col_count)
+            for name in missing:
+                col_map.append(name)
+                worksheet.update_cell(1, len(col_map), name)
+
+        return {name: col_map.index(name) + 1 for name in col_map}
+
+    if trigger:
+        if not st.session_state.get("jd_input") or not sheet_url or not resume_column_name:
+            st.error("Please provide a Job Description (top of page), Sheet URL, and resume link column name.")
+            st.stop()
+
         import gspread
         from oauth2client.service_account import ServiceAccountCredentials
         import tempfile
         import requests
+        import time
 
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        # creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
-        # service_account_info = json.loads(st.secrets["GOOGLE_SHEET_CREDENTIALS"])
         service_account_info = st.secrets["google_service_account"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
         client = gspread.authorize(creds)
@@ -565,15 +584,22 @@ with tabs[1]:
             sheet = client.open_by_url(sheet_url)
             worksheet = sheet.worksheet(worksheet_name)
             rows = worksheet.get_all_records()
+            col_map = get_or_create_col_map(worksheet, OUTPUT_COLUMNS)
+            is_first_call = True
 
             for i, row in enumerate(rows, start=2):
-                # Skip rows that already have a final decision
-                if row.get("Final Decision", "").strip():
+                # Skip rows already processed (AI: Score already filled in)
+                if str(row.get("AI: Score", "")).strip():
                     continue
 
                 link = row.get(resume_column_name, "").strip()
                 if not link:
                     continue
+
+                if not is_first_call and delay_seconds > 0:
+                    st.write(f"Waiting {delay_seconds}s before next call to avoid rate limits...")
+                    time.sleep(delay_seconds)
+                is_first_call = False
 
                 st.write(f"Processing Row {i}...")
 
@@ -596,44 +622,27 @@ with tabs[1]:
                         f.write(r.content)
 
                     resume_text = extract_text_from_pdf(open(temp_path, "rb"))
-                    result = analyze_resume(resume_text, st.session_state.requirements, model=st.session_state.selected_models["reasoning"])
+                    record = analyze_resume_for_sheet(
+                        resume_text,
+                        st.session_state.jd_input,
+                        model=st.session_state.selected_models["reasoning"]
+                    )
 
-                    if result:
-                        score = result["score"]
-                        if "requirement_match" in result['analysis']:
-                            recommendation = result["analysis"]["final_recommendation"]
-                            decision_summary = result["analysis"]["qualitative_assessment"].get("recruiter_style_summary", "N/A")
-                            skills_list = result["analysis"]["qualitative_assessment"].get("inferred_skills_from_projects", "N/A")
-                            skills = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
-                            resume_summary_list = result["analysis"]["summary_of_key_factors"]
-                            resume_summary = ", ".join(resume_summary_list) if isinstance(resume_summary_list, list) else str(resume_summary_list)
-
-                            
-                            
-                        else:
-                            recommendation = "N/A"
-                            decision_summary = "N/A"
-                            resume_summary = ", ".join(result['analysis'].get("summary_of_key_factors", []))
-                            skills = ", ".join(result['analysis'].get("resume_analysis", {}).get("skills", []))
-                        col_map = worksheet.row_values(1)
-                        def col_num(name):
-                            return col_map.index(name) + 1 if name in col_map else len(col_map) + 1
-                        worksheet.update_cell(i, col_num("Score"), score)
-                        worksheet.update_cell(i, col_num("Final Decision"), recommendation)
-                        worksheet.update_cell(i, col_num("Decision Summary"), decision_summary)
-                        worksheet.update_cell(i, col_num("Resume Summary"), resume_summary)
-                        worksheet.update_cell(i, col_num("Skills"), skills)
+                    if record:
+                        worksheet.update_cell(i, col_map["AI: Skills"], record.get("skills", ""))
+                        worksheet.update_cell(i, col_map["AI: Strongest Language"], record.get("strongest_language", ""))
+                        worksheet.update_cell(i, col_map["AI: Summary"], record.get("summary", ""))
+                        worksheet.update_cell(i, col_map["AI: Score"], record.get("score", ""))
 
                         st.success(f"✅ Row {i} processed")
 
                     else:
-                        worksheet.update_cell(i, len(row) + 1, "Analysis failed")
+                        worksheet.update_cell(i, col_map["AI: Summary"], "Analysis failed")
                         st.error(f"❌ Row {i} analysis failed")
 
                 except Exception as e:
                     st.error(f"⚠️ Error on row {i}: {e}")
-                    worksheet.update_cell(i, len(row) + 1, f"Error: {str(e)}")
-
+                    worksheet.update_cell(i, col_map["AI: Summary"], f"Error: {str(e)}")
 
         except Exception as e:
             st.error(f"Could not open sheet: {e}")
