@@ -10,9 +10,9 @@ load_dotenv()
 # Initialize OpenAI client
 
 
-GROQ_MODEL = "openai/gpt-oss-120b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
 
-def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
+def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
     """
     Analyzes a resume against the structured requirements from the JD analyzer.
     Returns a comprehensive analysis including quantitative matches and qualitative assessment.
@@ -26,8 +26,8 @@ def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
             - additional_screening_criteria
         model (str): The Fireworks model id to use for analysis
     """
-    groq_key = st.secrets["groq-key"]
-    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
+    fireworks_key = st.secrets["fireworks-key"]
+    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
     has_jd = requirements and any(k in requirements for k in [
         "original_job_description", "must_have_requirements", "good_to_have_requirements", "additional_screening_criteria"
     ])
@@ -151,7 +151,7 @@ def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="high"
+                reasoning_effort="medium"
             )
 
             # Parse the response into a dictionary
@@ -233,7 +233,7 @@ def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="high"
+                reasoning_effort="medium"
             )
 
             # Parse the response into a dictionary
@@ -251,7 +251,7 @@ def analyze_resume(resume_text, requirements=None, model=GROQ_MODEL):
         print(f"Error in analyze_resume: {str(e)}")
         return None
 
-def analyze_resume_for_sheet(resume_text, job_description, model=GROQ_MODEL):
+def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL):
     """
     Single-call resume evaluator for the Google Sheet flow.
     Given the raw JD text and a resume's text, extracts the candidate's
@@ -270,8 +270,8 @@ def analyze_resume_for_sheet(resume_text, job_description, model=GROQ_MODEL):
         dict with keys: skills, strongest_language, summary, score (int 0-100).
         Returns None on failure.
     """
-    groq_key = st.secrets["groq-key"]
-    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
+    fireworks_key = st.secrets["fireworks-key"]
+    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
 
     max_retries = 4
     retry_wait_seconds = 20  # grows each attempt: 20s, 40s, 60s, 80s
@@ -317,7 +317,7 @@ def analyze_resume_for_sheet(resume_text, job_description, model=GROQ_MODEL):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="high",
+                reasoning_effort="medium",
                 max_completion_tokens=4096
             )
 

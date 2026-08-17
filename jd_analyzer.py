@@ -8,19 +8,19 @@ import streamlit as st
 # Load environment variables
 load_dotenv()
 
-GROQ_MODEL = "openai/gpt-oss-120b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
 
-def analyze_job_description(job_description, model=GROQ_MODEL):
+def analyze_job_description(job_description, model=FIREWORKS_MODEL):
     """
     Analyzes a job description using an LLM and extracts structured requirements.
     Returns a dictionary with must-have, good-to-have, and additional screening criteria.
 
     Args:
         job_description (str): The job description text to analyze
-        model (str): The Groq model id to use for analysis
+        model (str): The Fireworks model id to use for analysis
     """
-    groq_key = st.secrets["groq-key"]
-    client = OpenAI(api_key=groq_key['GROQ_API_KEY'], base_url="https://api.groq.com/openai/v1")
+    fireworks_key = st.secrets["fireworks-key"]
+    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
     try:
         response = client.chat.completions.create(
             model=model,

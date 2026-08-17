@@ -28,9 +28,9 @@ if "job_description" not in st.session_state:
     st.session_state.job_description = None
 if "formatted_reqs" not in st.session_state:
     st.session_state.formatted_reqs = None
-GROQ_MODEL = "openai/gpt-oss-120b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
 if "selected_models" not in st.session_state:
-    st.session_state.selected_models = {"primary": GROQ_MODEL, "reasoning": GROQ_MODEL}
+    st.session_state.selected_models = {"primary": FIREWORKS_MODEL, "reasoning": FIREWORKS_MODEL}
 
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -464,10 +464,10 @@ with st.expander("📝 Job Description (Required)"):
         else:
             st.error("Please paste a job description first.")
 
-# Model: single Groq model used for both JD analysis and resume evaluation
+# Model: single Fireworks model used for both JD analysis and resume evaluation
 st.sidebar.title("Model")
-st.sidebar.markdown(f"`{GROQ_MODEL}` (Groq)")
-st.session_state.selected_models = {"primary": GROQ_MODEL, "reasoning": GROQ_MODEL}
+st.sidebar.markdown(f"`{FIREWORKS_MODEL}` (Fireworks)")
+st.session_state.selected_models = {"primary": FIREWORKS_MODEL, "reasoning": FIREWORKS_MODEL}
 
 # Tabs for workflows
 tabs = st.tabs(["📁 Upload Resumes", "📊 Sheet-based Analysis"])
@@ -537,8 +537,8 @@ with tabs[1]:
 
     resume_column_name = st.text_input("Column name with Resume Links", value="Resume")
     delay_seconds = st.number_input(
-        "Delay between resumes (seconds)", min_value=0, max_value=120, value=20,
-        help="Groq's free tier has a tokens-per-minute limit. A short delay between calls avoids hitting it on longer batches."
+        "Delay between resumes (seconds)", min_value=0, max_value=120, value=3,
+        help="Fireworks has no daily token cap, just generous per-minute limits (higher still once a payment method is on file). A small delay is just a safety buffer, not a workaround for a hard ceiling."
     )
     trigger = st.button("Start Sheet-Based Resume Analysis")
 
