@@ -8,7 +8,7 @@ import streamlit as st
 # Load environment variables
 load_dotenv()
 
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 
 def analyze_job_description(job_description, model=FIREWORKS_MODEL):
     """

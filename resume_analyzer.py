@@ -10,7 +10,7 @@ load_dotenv()
 # Initialize OpenAI client
 
 
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 
 def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
     """

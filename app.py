@@ -28,7 +28,7 @@ if "job_description" not in st.session_state:
     st.session_state.job_description = None
 if "formatted_reqs" not in st.session_state:
     st.session_state.formatted_reqs = None
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-20b"
+FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 if "selected_models" not in st.session_state:
     st.session_state.selected_models = {"primary": FIREWORKS_MODEL, "reasoning": FIREWORKS_MODEL}
 
