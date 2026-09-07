@@ -9,3 +9,5 @@ streamlit-elements
 gspread
 oauth2client
 requests
+fastapi
+uvicorn

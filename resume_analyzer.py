@@ -251,27 +251,32 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
         print(f"Error in analyze_resume: {str(e)}")
         return None
 
-def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL):
+def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None):
     """
-    Single-call resume evaluator for the Google Sheet flow.
-    Given the raw JD text and a resume's text, extracts the candidate's
-    skills and strongest programming language, plus a short prose summary
-    and a 0-100 JD-fit score, in one flat JSON object suitable for writing
-    straight into spreadsheet columns.
+    Single-call resume evaluator - the core "score a resume against a JD"
+    primitive shared by the Streamlit sheet flow and the standalone API
+    backend. Given the raw JD text and a resume's text, extracts the
+    candidate's skills and strongest programming language, plus a short
+    prose summary and a 0-100 JD-fit score, in one flat JSON object.
     Does NOT extract name/email/phone/experience - those are assumed to
-    already exist as manually-entered columns in the sheet.
+    already exist as manually-entered columns in the sheet (or are the
+    calling application's own concern, for API callers).
 
     Args:
         resume_text (str): The text content of the resume
         job_description (str): The raw job description text
-        model (str): The Groq model id to use for analysis
+        model (str): The Fireworks model id to use for analysis
+        api_key (str, optional): Fireworks API key. If not given, falls back
+            to st.secrets["fireworks-key"]["FIREWORKS_API_KEY"] (Streamlit
+            usage). Non-Streamlit callers (e.g. api.py) must pass this.
 
     Returns:
         dict with keys: skills, strongest_language, summary, score (int 0-100).
         Returns None on failure.
     """
-    fireworks_key = st.secrets["fireworks-key"]
-    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
+    if api_key is None:
+        api_key = st.secrets["fireworks-key"]["FIREWORKS_API_KEY"]
+    client = OpenAI(api_key=api_key, base_url="https://api.fireworks.ai/inference/v1")
 
     max_retries = 4
     retry_wait_seconds = 20  # grows each attempt: 20s, 40s, 60s, 80s
