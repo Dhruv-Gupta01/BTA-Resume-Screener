@@ -10,7 +10,13 @@ import json
 # Remove streamlit-elements import
 # from streamlit_elements import elements, mui
 from jd_analyzer import analyze_job_description, format_requirements_for_display, parse_edited_requirements
-from resume_analyzer import analyze_resume, analyze_resume_for_sheet
+from resume_analyzer import analyze_resume
+
+# Sheet-based Analysis (Tab 2) scores resumes via the standalone backend API
+# deployed on Render, instead of calling the LLM in-process - this is the
+# same backend other applications call directly. Tab 1 (manual upload) is
+# unaffected and still uses analyze_resume() in-process.
+BACKEND_API_URL = "https://bta-resume-screener.onrender.com"
 # Load environment variables
 load_dotenv()
 
@@ -622,11 +628,24 @@ with tabs[1]:
                         f.write(r.content)
 
                     resume_text = extract_text_from_pdf(open(temp_path, "rb"))
-                    record = analyze_resume_for_sheet(
-                        resume_text,
-                        st.session_state.jd_input,
-                        model=st.session_state.selected_models["reasoning"]
-                    )
+
+                    # Score via the backend API (Render) instead of calling the LLM
+                    # in-process - Render's free tier can take 30-60s to wake from
+                    # idle, so this uses a generous timeout rather than failing fast.
+                    backend_key = st.secrets["backend-key"]["BACKEND_API_KEY"]
+                    try:
+                        api_resp = requests.post(
+                            f"{BACKEND_API_URL}/score-resume",
+                            headers={"X-API-Key": backend_key},
+                            json={"job_description": st.session_state.jd_input, "resume_text": resume_text},
+                            timeout=120,
+                        )
+                        record = api_resp.json() if api_resp.status_code == 200 else None
+                        if record is None:
+                            st.error(f"⚠️ Backend returned {api_resp.status_code} for row {i}: {api_resp.text}")
+                    except requests.exceptions.Timeout:
+                        record = None
+                        st.error(f"⚠️ Backend timed out for row {i} (it may be waking up from idle - try again)")
 
                     if record:
                         worksheet.update_cell(i, col_map["AI: Skills"], record.get("skills", ""))
