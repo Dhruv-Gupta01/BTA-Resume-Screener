@@ -354,6 +354,28 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
             except (TypeError, ValueError):
                 normalized["score"] = 0
 
+            # Occasionally the model returns a technically-valid but empty
+            # JSON object (no exception, no error) - all fields blank and
+            # score 0. That's indistinguishable from a real result unless we
+            # check for it explicitly, and silently returning it would look
+            # like a genuine "this candidate scored 0" judgment rather than
+            # a malformed generation. Treat it as retryable, same as a
+            # rate limit, rather than returning it as-is.
+            is_empty_result = (
+                not normalized["skills"]
+                and not normalized["strongest_language"]
+                and not normalized["summary"]
+                and normalized["score"] == 0
+            )
+            if is_empty_result:
+                if attempt < max_retries - 1:
+                    print(f"Empty/malformed generation (attempt {attempt + 1}/{max_retries}), retrying...")
+                    time.sleep(2)
+                    continue
+                else:
+                    print("Empty/malformed generation, out of retries.")
+                    return None
+
             return normalized
 
         except (RateLimitError, APIStatusError) as e:
