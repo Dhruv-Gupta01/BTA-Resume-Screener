@@ -555,11 +555,12 @@ with tabs[1]:
             "(not left to the model's own math). Weights don't need to sum to 100 - they're normalized "
             "automatically. Leave this empty to use the default single holistic score instead."
         )
-        if "criteria_df" not in st.session_state:
-            st.session_state.criteria_df = pd.DataFrame([{"Criterion": "", "Weight": 0}])
-
+        # Pass a stable default each rerun - st.data_editor tracks user edits
+        # internally via its own `key`, so writing the edited result back into
+        # a session_state variable that's then fed back in as `data` fights
+        # the widget's own diff-tracking and causes edited values to reset.
         criteria_df = st.data_editor(
-            st.session_state.criteria_df,
+            pd.DataFrame([{"Criterion": "", "Weight": 0}]),
             num_rows="dynamic",
             use_container_width=True,
             key="criteria_editor",
@@ -568,7 +569,13 @@ with tabs[1]:
                 "Weight": st.column_config.NumberColumn("Weight", min_value=0, max_value=1000, step=1),
             },
         )
-        st.session_state.criteria_df = criteria_df
+
+        jd_weight = st.number_input(
+            "JD Weight (optional)", min_value=0, max_value=1000, value=0, step=1,
+            help="How much the model's own overall JD-fit judgment should count, as one more weighted "
+            "entry alongside the criteria above (e.g. 30 = the JD's overall fit makes up 30 parts of the "
+            "total, same normalization as the criteria weights). Leave at 0 to score on criteria alone."
+        )
 
     trigger = st.button("Start Sheet-Based Resume Analysis")
 
@@ -599,10 +606,12 @@ with tabs[1]:
             st.error("Please provide a Job Description (top of page), Sheet URL, and resume link column name.")
             st.stop()
 
-        # Build the weighted criteria list from the editor, dropping blank/zero-weight rows
+        # Build the weighted criteria list from the editor, dropping blank/zero-weight rows.
+        # criteria_df is the st.data_editor's return value from earlier in this same
+        # script run - Streamlit reruns top-to-bottom, so it's already fresh here.
         criteria_list = [
             {"text": str(row["Criterion"]).strip(), "weight": float(row["Weight"])}
-            for _, row in st.session_state.criteria_df.iterrows()
+            for _, row in criteria_df.iterrows()
             if str(row.get("Criterion", "")).strip() and float(row.get("Weight") or 0) > 0
         ]
 
@@ -667,6 +676,8 @@ with tabs[1]:
                     request_payload = {"job_description": st.session_state.jd_input, "resume_text": resume_text}
                     if criteria_list:
                         request_payload["criteria"] = criteria_list
+                    if jd_weight > 0:
+                        request_payload["jd_weight"] = jd_weight
                     try:
                         api_resp = requests.post(
                             f"{BACKEND_API_URL}/score-resume",

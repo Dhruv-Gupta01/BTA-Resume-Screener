@@ -251,7 +251,7 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
         print(f"Error in analyze_resume: {str(e)}")
         return None
 
-def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None, criteria=None):
+def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None, criteria=None, jd_weight=0):
     """
     Single-call resume evaluator - the core "score a resume against a JD"
     primitive shared by the Streamlit sheet flow and the standalone API
@@ -273,19 +273,30 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
             rubric, e.g. [{"text": "4 to 7 years of experience building
             production systems, not just internal tools", "weight": 40}].
             When given, the model scores the resume against EACH criterion
-            independently (0-100), and the final "score" is a weighted
-            average computed here in code (not by the model) - this keeps
-            the actual weighting arithmetic deterministic and auditable
-            instead of trusting the LLM to do the math itself. Weights
-            don't need to sum to 100 - they're normalized automatically.
-            When omitted/empty, behavior is unchanged: one holistic score
-            from the model, exactly as before this parameter existed.
+            independently (0-100).
+        jd_weight (float, optional): Weight to give the model's own holistic
+            "fit against the JD as a whole" judgment, treated as one more
+            entry alongside `criteria` in the same weighted average - e.g.
+            jd_weight=30 with two criteria weighted 40 and 30 means the
+            final score is 30% general JD fit, 40%/30% those two specific
+            criteria. Default 0 means the JD contributes nothing to the
+            score directly (criteria only, or - if criteria is also empty -
+            legacy single-holistic-score behavior, unchanged from before
+            this parameter existed).
+
+        The final "score" is always a weighted average computed here in
+        code (not by the model) whenever criteria and/or jd_weight are
+        used - this keeps the weighting arithmetic deterministic and
+        auditable instead of trusting the LLM to do the math itself.
+        Weights don't need to sum to 100 - they're normalized automatically.
 
     Returns:
         dict with keys: skills, strongest_language, summary, score (int 0-100),
-        and - only when `criteria` was given - criteria_breakdown: a list of
-        {criterion, weight, score} showing the per-criterion sub-scores that
-        produced the final weighted score. Returns None on failure.
+        and - only when `criteria` and/or `jd_weight` were used - a
+        criteria_breakdown list of {criterion, weight, score} showing every
+        sub-score (including a "Overall fit to the job description as a
+        whole" entry when jd_weight > 0) that produced the final weighted
+        score. Returns None on failure.
     """
     if api_key is None:
         api_key = st.secrets["fireworks-key"]["FIREWORKS_API_KEY"]
@@ -294,38 +305,57 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
     # Drop any criteria with a non-positive weight - they'd contribute
     # nothing to the weighted average and just add prompt noise.
     criteria = [c for c in (criteria or []) if c.get("text", "").strip() and float(c.get("weight", 0)) > 0]
+    try:
+        jd_weight = float(jd_weight or 0)
+    except (TypeError, ValueError):
+        jd_weight = 0
+    use_jd_score = jd_weight > 0
+    JD_LABEL = "Overall fit to the job description as a whole"
 
     max_retries = 4
     retry_wait_seconds = 20  # grows each attempt: 20s, 40s, 60s, 80s
 
-    if criteria:
+    if criteria or use_jd_score:
         criteria_list_text = "\n".join(f"{i + 1}. {c['text']}" for i, c in enumerate(criteria))
-        system_prompt = f"""You are a recruiter evaluating a resume against a job description and a specific weighted scoring rubric.
+        rubric_block = f"""
+
+                        ## Rubric Criteria:
+                        {criteria_list_text}""" if criteria else ""
+
+        criteria_scores_instruction = (
+            f"criteria_scores: for EACH numbered criterion below, judge how well the resume satisfies THAT SPECIFIC criterion on a 0-100 scale (0 = does not satisfy it at all, 100 = fully satisfies it), independent of the others and independent of the JD as a whole. Return exactly {len(criteria)} entries, in the SAME ORDER as listed, one per criterion - do not skip, merge, or reorder any."
+            if criteria else
+            "criteria_scores: return an empty list [] - there are no rubric criteria to score."
+        )
+        jd_score_instruction = (
+            "\n                        5. overall_jd_fit_score: judge the resume's overall fit against the job description AS A WHOLE (0-100), independent of the specific rubric criteria above - this is your general recruiter judgment of the full JD match."
+            if use_jd_score else ""
+        )
+        jd_score_example = ',\n                          "overall_jd_fit_score": 65' if use_jd_score else ""
+
+        example_criteria_scores = f'[\n                            {{"criterion": "{criteria[0]["text"]}", "score": 78}}\n                          ]' if criteria else "[]"
+
+        system_prompt = f"""You are a recruiter evaluating a resume against a job description{" and a specific weighted scoring rubric" if criteria else ""}.
 
                         ## Task
                         1. skills: a comma-separated list of the candidate's technical and relevant non-technical skills (explicit and reasonably inferred from their projects/roles).
                         2. strongest_language: the ONE programming language the candidate has the most hands-on, production-level experience in, based solely on their resume (not the JD) - judge from depth/recency/volume of work shown, not just first-listed skill. A single language name (e.g. "Python"), or "" if none can be determined.
-                        3. Write a short recruiter-style summary (3-5 sentences, plain text, no markdown) covering the candidate's experience, key projects, and how well they fit the job description - mention concrete strengths and gaps relative to the rubric criteria below.
-                        4. criteria_scores: for EACH numbered criterion below, judge how well the resume satisfies THAT SPECIFIC criterion on a 0-100 scale (0 = does not satisfy it at all, 100 = fully satisfies it), independent of the others. Return exactly {len(criteria)} entries, in the SAME ORDER as listed, one per criterion - do not skip, merge, or reorder any.
-
-                        ## Rubric Criteria:
-                        {criteria_list_text}
+                        3. Write a short recruiter-style summary (3-5 sentences, plain text, no markdown) covering the candidate's experience, key projects, and how well they fit the job description - mention concrete strengths and gaps relative to {"the rubric criteria and the JD" if criteria else "the JD"}.
+                        4. {criteria_scores_instruction}{jd_score_instruction}{rubric_block}
 
                         ## Output Format (strictly follow this JSON structure, no extra text):
                         {{
                           "skills": "Python, Django, REST APIs, PostgreSQL, AWS, Docker",
                           "strongest_language": "Python",
-                          "summary": "The candidate has 4 years of backend engineering experience building REST APIs in Python/Django and deploying on AWS. They meet the production-systems experience criterion strongly, though their years of experience fall slightly short of the stated range.",
-                          "criteria_scores": [
-                            {{"criterion": "{criteria[0]['text']}", "score": 78}}
-                          ]
+                          "summary": "The candidate has 4 years of backend engineering experience building REST APIs in Python/Django and deploying on AWS.",
+                          "criteria_scores": {example_criteria_scores}{jd_score_example}
                         }}
 
-                        If skills or strongest_language cannot be found, use an empty string (""). Do NOT include an overall "score" field - that is computed separately from criteria_scores."""
+                        If skills or strongest_language cannot be found, use an empty string (""). Do NOT include a top-level "score" field - the final score is computed separately from criteria_scores{" and overall_jd_fit_score" if use_jd_score else ""}."""
 
-        user_prompt = f"""Extract the candidate's skills and strongest language, write a summary, and score the resume against each rubric criterion as per the system instructions.
+        user_prompt = f"""Extract the candidate's skills and strongest language, write a summary, and score the resume as per the system instructions.
 
-                        ## Job Description (context only - score against the rubric criteria, not the JD as a whole):
+                        ## Job Description{" (context for interpreting the rubric criteria" + ("" if use_jd_score else ", not scored directly") + ")" if criteria else ""}:
                         {job_description}
 
                         ## Resume:
@@ -398,7 +428,7 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                 "summary": pick("summary", "recruiter_style_summary", "recruiter_summary"),
             }
 
-            if criteria:
+            if criteria or use_jd_score:
                 raw_scores = record.get("criteria_scores") or record.get("criterion_scores") or []
                 if not isinstance(raw_scores, list) or len(raw_scores) != len(criteria):
                     # Model didn't return one sub-score per criterion - can't
@@ -412,6 +442,17 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                         print("criteria_scores length mismatch, out of retries.")
                         return None
 
+                if use_jd_score:
+                    jd_raw = record.get("overall_jd_fit_score", record.get("jd_fit_score"))
+                    if jd_raw is None:
+                        if attempt < max_retries - 1:
+                            print("overall_jd_fit_score missing while jd_weight > 0, retrying...")
+                            time.sleep(2)
+                            continue
+                        else:
+                            print("overall_jd_fit_score missing, out of retries.")
+                            return None
+
                 breakdown = []
                 weighted_sum = 0.0
                 weight_total = 0.0
@@ -424,6 +465,15 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                     breakdown.append({"criterion": c["text"], "weight": weight, "score": sub_score})
                     weighted_sum += sub_score * weight
                     weight_total += weight
+
+                if use_jd_score:
+                    try:
+                        jd_sub_score = max(0, min(100, int(round(float(jd_raw)))))
+                    except (TypeError, ValueError):
+                        jd_sub_score = 0
+                    breakdown.append({"criterion": JD_LABEL, "weight": jd_weight, "score": jd_sub_score})
+                    weighted_sum += jd_sub_score * jd_weight
+                    weight_total += jd_weight
 
                 normalized["score"] = int(round(weighted_sum / weight_total)) if weight_total > 0 else 0
                 normalized["criteria_breakdown"] = breakdown

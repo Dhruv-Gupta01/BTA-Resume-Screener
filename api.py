@@ -79,6 +79,7 @@ class ResumeScoreRequest(BaseModel):
     job_description: str
     resume_text: str
     criteria: Optional[List[Criterion]] = None
+    jd_weight: float = Field(default=0, ge=0)
 
 
 class ResumeScoreResult(BaseModel):
@@ -98,6 +99,7 @@ class BatchScoreRequest(BaseModel):
     job_description: str
     resumes: List[ResumeItem] = Field(..., max_length=MAX_BATCH_SIZE)
     criteria: Optional[List[Criterion]] = None
+    jd_weight: float = Field(default=0, ge=0)
 
 
 class BatchScoreResultItem(BaseModel):
@@ -119,14 +121,20 @@ def health():
 @app.post("/score-resume", response_model=ResumeScoreResult)
 def score_resume(payload: ResumeScoreRequest, x_api_key: Optional[str] = Header(None)):
     """
-    Score a single resume against a job description. Optionally pass
-    `criteria` - a weighted rubric - to get a deterministic weighted score
-    (computed here, not by the model) instead of one holistic LLM score.
+    Score a single resume against a job description.
+
+    Optionally pass `criteria` (a weighted rubric) and/or `jd_weight` (how
+    much the model's own holistic JD-fit judgment should count, treated as
+    one more weighted entry alongside `criteria`) to get a deterministic
+    weighted score computed here, instead of one holistic LLM score.
+    Both default to "off" (jd_weight=0, no criteria), which reproduces the
+    original single-holistic-score behavior exactly.
     """
     check_auth(x_api_key)
     criteria = [c.model_dump() for c in payload.criteria] if payload.criteria else None
     result = analyze_resume_for_sheet(
-        payload.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY, criteria=criteria
+        payload.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY,
+        criteria=criteria, jd_weight=payload.jd_weight
     )
     if result is None:
         raise HTTPException(status_code=502, detail="Resume analysis failed (upstream LLM error)")
@@ -143,9 +151,9 @@ def score_resumes(payload: BatchScoreRequest, x_api_key: Optional[str] = Header(
     not 100 call-durations. One resume's failure does not fail the batch -
     it comes back as an item with `error` set instead of `result`.
 
-    Optionally pass `criteria` - a weighted rubric applied to every resume
-    in this batch - to get a deterministic weighted score per candidate
-    instead of one holistic LLM score.
+    Optionally pass `criteria` and/or `jd_weight` (applied to every resume
+    in this batch) to get a deterministic weighted score per candidate
+    instead of one holistic LLM score - see /score-resume for details.
     """
     check_auth(x_api_key)
     criteria = [c.model_dump() for c in payload.criteria] if payload.criteria else None
@@ -153,7 +161,8 @@ def score_resumes(payload: BatchScoreRequest, x_api_key: Optional[str] = Header(
     def _score_one(item: ResumeItem) -> BatchScoreResultItem:
         try:
             result = analyze_resume_for_sheet(
-                item.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY, criteria=criteria
+                item.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY,
+                criteria=criteria, jd_weight=payload.jd_weight
             )
             if result is None:
                 return BatchScoreResultItem(id=item.id, error="Resume analysis failed (upstream LLM error)")
