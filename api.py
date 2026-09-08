@@ -60,9 +60,25 @@ def check_auth(x_api_key: Optional[str]):
         raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
 
 
+class Criterion(BaseModel):
+    """One weighted scoring rubric line, e.g. {"text": "4 to 7 years of
+    experience building production systems, not just internal tools.",
+    "weight": 40}. Weights don't need to sum to 100 - they're normalized
+    automatically when the weighted average is computed."""
+    text: str
+    weight: float = Field(gt=0)
+
+
+class CriterionBreakdown(BaseModel):
+    criterion: str
+    weight: float
+    score: int
+
+
 class ResumeScoreRequest(BaseModel):
     job_description: str
     resume_text: str
+    criteria: Optional[List[Criterion]] = None
 
 
 class ResumeScoreResult(BaseModel):
@@ -70,6 +86,7 @@ class ResumeScoreResult(BaseModel):
     strongest_language: str
     summary: str
     score: int
+    criteria_breakdown: Optional[List[CriterionBreakdown]] = None
 
 
 class ResumeItem(BaseModel):
@@ -80,6 +97,7 @@ class ResumeItem(BaseModel):
 class BatchScoreRequest(BaseModel):
     job_description: str
     resumes: List[ResumeItem] = Field(..., max_length=MAX_BATCH_SIZE)
+    criteria: Optional[List[Criterion]] = None
 
 
 class BatchScoreResultItem(BaseModel):
@@ -100,9 +118,16 @@ def health():
 
 @app.post("/score-resume", response_model=ResumeScoreResult)
 def score_resume(payload: ResumeScoreRequest, x_api_key: Optional[str] = Header(None)):
-    """Score a single resume against a job description."""
+    """
+    Score a single resume against a job description. Optionally pass
+    `criteria` - a weighted rubric - to get a deterministic weighted score
+    (computed here, not by the model) instead of one holistic LLM score.
+    """
     check_auth(x_api_key)
-    result = analyze_resume_for_sheet(payload.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY)
+    criteria = [c.model_dump() for c in payload.criteria] if payload.criteria else None
+    result = analyze_resume_for_sheet(
+        payload.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY, criteria=criteria
+    )
     if result is None:
         raise HTTPException(status_code=502, detail="Resume analysis failed (upstream LLM error)")
     return result
@@ -117,12 +142,19 @@ def score_resumes(payload: BatchScoreRequest, x_api_key: Optional[str] = Header(
     so 100 resumes take roughly total_resumes / MAX_CONCURRENT_CALLS call-durations,
     not 100 call-durations. One resume's failure does not fail the batch -
     it comes back as an item with `error` set instead of `result`.
+
+    Optionally pass `criteria` - a weighted rubric applied to every resume
+    in this batch - to get a deterministic weighted score per candidate
+    instead of one holistic LLM score.
     """
     check_auth(x_api_key)
+    criteria = [c.model_dump() for c in payload.criteria] if payload.criteria else None
 
     def _score_one(item: ResumeItem) -> BatchScoreResultItem:
         try:
-            result = analyze_resume_for_sheet(item.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY)
+            result = analyze_resume_for_sheet(
+                item.resume_text, payload.job_description, api_key=FIREWORKS_API_KEY, criteria=criteria
+            )
             if result is None:
                 return BatchScoreResultItem(id=item.id, error="Resume analysis failed (upstream LLM error)")
             return BatchScoreResultItem(id=item.id, result=ResumeScoreResult(**result))

@@ -546,12 +546,36 @@ with tabs[1]:
         "Delay between resumes (seconds)", min_value=0, max_value=120, value=3,
         help="Fireworks has no daily token cap, just generous per-minute limits (higher still once a payment method is on file). A small delay is just a safety buffer, not a workaround for a hard ceiling."
     )
+
+    with st.expander("⚖️ Weighted Scoring Criteria (optional)"):
+        st.caption(
+            "Add specific requirements with a weight each, e.g. \"4 to 7 years of experience building "
+            "production systems, not just internal tools\" with weight 40. The final score becomes a "
+            "weighted average of how well the resume satisfies each criterion, computed deterministically "
+            "(not left to the model's own math). Weights don't need to sum to 100 - they're normalized "
+            "automatically. Leave this empty to use the default single holistic score instead."
+        )
+        if "criteria_df" not in st.session_state:
+            st.session_state.criteria_df = pd.DataFrame([{"Criterion": "", "Weight": 0}])
+
+        criteria_df = st.data_editor(
+            st.session_state.criteria_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="criteria_editor",
+            column_config={
+                "Criterion": st.column_config.TextColumn("Criterion", width="large"),
+                "Weight": st.column_config.NumberColumn("Weight", min_value=0, max_value=1000, step=1),
+            },
+        )
+        st.session_state.criteria_df = criteria_df
+
     trigger = st.button("Start Sheet-Based Resume Analysis")
 
     # Columns this flow writes results into (auto-created in the sheet if missing).
     # Prefixed with "AI:" so results are visually distinct from manually-entered
     # columns, and so reruns reuse these exact columns instead of duplicating them.
-    OUTPUT_COLUMNS = ["AI: Skills", "AI: Strongest Language", "AI: Summary", "AI: Score"]
+    OUTPUT_COLUMNS = ["AI: Skills", "AI: Strongest Language", "AI: Summary", "AI: Score", "AI: Criteria Breakdown"]
 
     def get_or_create_col_map(worksheet, needed_columns):
         """Return {column_name: 1-based col index}, appending any missing
@@ -574,6 +598,13 @@ with tabs[1]:
         if not st.session_state.get("jd_input") or not sheet_url or not resume_column_name:
             st.error("Please provide a Job Description (top of page), Sheet URL, and resume link column name.")
             st.stop()
+
+        # Build the weighted criteria list from the editor, dropping blank/zero-weight rows
+        criteria_list = [
+            {"text": str(row["Criterion"]).strip(), "weight": float(row["Weight"])}
+            for _, row in st.session_state.criteria_df.iterrows()
+            if str(row.get("Criterion", "")).strip() and float(row.get("Weight") or 0) > 0
+        ]
 
         import gspread
         from oauth2client.service_account import ServiceAccountCredentials
@@ -633,11 +664,14 @@ with tabs[1]:
                     # in-process - Render's free tier can take 30-60s to wake from
                     # idle, so this uses a generous timeout rather than failing fast.
                     backend_key = st.secrets["backend-key"]["BACKEND_API_KEY"]
+                    request_payload = {"job_description": st.session_state.jd_input, "resume_text": resume_text}
+                    if criteria_list:
+                        request_payload["criteria"] = criteria_list
                     try:
                         api_resp = requests.post(
                             f"{BACKEND_API_URL}/score-resume",
                             headers={"X-API-Key": backend_key},
-                            json={"job_description": st.session_state.jd_input, "resume_text": resume_text},
+                            json=request_payload,
                             timeout=120,
                         )
                         record = api_resp.json() if api_resp.status_code == 200 else None
@@ -652,6 +686,13 @@ with tabs[1]:
                         worksheet.update_cell(i, col_map["AI: Strongest Language"], record.get("strongest_language", ""))
                         worksheet.update_cell(i, col_map["AI: Summary"], record.get("summary", ""))
                         worksheet.update_cell(i, col_map["AI: Score"], record.get("score", ""))
+
+                        breakdown = record.get("criteria_breakdown")
+                        if breakdown:
+                            breakdown_text = " | ".join(
+                                f"{item['criterion']} (weight {item['weight']:g}): {item['score']}" for item in breakdown
+                            )
+                            worksheet.update_cell(i, col_map["AI: Criteria Breakdown"], breakdown_text)
 
                         st.success(f"✅ Row {i} processed")
 

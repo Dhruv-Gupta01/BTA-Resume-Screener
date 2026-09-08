@@ -251,13 +251,13 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
         print(f"Error in analyze_resume: {str(e)}")
         return None
 
-def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None):
+def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None, criteria=None):
     """
     Single-call resume evaluator - the core "score a resume against a JD"
     primitive shared by the Streamlit sheet flow and the standalone API
     backend. Given the raw JD text and a resume's text, extracts the
     candidate's skills and strongest programming language, plus a short
-    prose summary and a 0-100 JD-fit score, in one flat JSON object.
+    prose summary and a JD-fit score, in one flat JSON object.
     Does NOT extract name/email/phone/experience - those are assumed to
     already exist as manually-entered columns in the sheet (or are the
     calling application's own concern, for API callers).
@@ -269,26 +269,71 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
         api_key (str, optional): Fireworks API key. If not given, falls back
             to st.secrets["fireworks-key"]["FIREWORKS_API_KEY"] (Streamlit
             usage). Non-Streamlit callers (e.g. api.py) must pass this.
+        criteria (list[dict], optional): User-defined weighted scoring
+            rubric, e.g. [{"text": "4 to 7 years of experience building
+            production systems, not just internal tools", "weight": 40}].
+            When given, the model scores the resume against EACH criterion
+            independently (0-100), and the final "score" is a weighted
+            average computed here in code (not by the model) - this keeps
+            the actual weighting arithmetic deterministic and auditable
+            instead of trusting the LLM to do the math itself. Weights
+            don't need to sum to 100 - they're normalized automatically.
+            When omitted/empty, behavior is unchanged: one holistic score
+            from the model, exactly as before this parameter existed.
 
     Returns:
-        dict with keys: skills, strongest_language, summary, score (int 0-100).
-        Returns None on failure.
+        dict with keys: skills, strongest_language, summary, score (int 0-100),
+        and - only when `criteria` was given - criteria_breakdown: a list of
+        {criterion, weight, score} showing the per-criterion sub-scores that
+        produced the final weighted score. Returns None on failure.
     """
     if api_key is None:
         api_key = st.secrets["fireworks-key"]["FIREWORKS_API_KEY"]
     client = OpenAI(api_key=api_key, base_url="https://api.fireworks.ai/inference/v1")
 
+    # Drop any criteria with a non-positive weight - they'd contribute
+    # nothing to the weighted average and just add prompt noise.
+    criteria = [c for c in (criteria or []) if c.get("text", "").strip() and float(c.get("weight", 0)) > 0]
+
     max_retries = 4
     retry_wait_seconds = 20  # grows each attempt: 20s, 40s, 60s, 80s
 
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a recruiter evaluating a resume against a job description.
+    if criteria:
+        criteria_list_text = "\n".join(f"{i + 1}. {c['text']}" for i, c in enumerate(criteria))
+        system_prompt = f"""You are a recruiter evaluating a resume against a job description and a specific weighted scoring rubric.
+
+                        ## Task
+                        1. skills: a comma-separated list of the candidate's technical and relevant non-technical skills (explicit and reasonably inferred from their projects/roles).
+                        2. strongest_language: the ONE programming language the candidate has the most hands-on, production-level experience in, based solely on their resume (not the JD) - judge from depth/recency/volume of work shown, not just first-listed skill. A single language name (e.g. "Python"), or "" if none can be determined.
+                        3. Write a short recruiter-style summary (3-5 sentences, plain text, no markdown) covering the candidate's experience, key projects, and how well they fit the job description - mention concrete strengths and gaps relative to the rubric criteria below.
+                        4. criteria_scores: for EACH numbered criterion below, judge how well the resume satisfies THAT SPECIFIC criterion on a 0-100 scale (0 = does not satisfy it at all, 100 = fully satisfies it), independent of the others. Return exactly {len(criteria)} entries, in the SAME ORDER as listed, one per criterion - do not skip, merge, or reorder any.
+
+                        ## Rubric Criteria:
+                        {criteria_list_text}
+
+                        ## Output Format (strictly follow this JSON structure, no extra text):
+                        {{
+                          "skills": "Python, Django, REST APIs, PostgreSQL, AWS, Docker",
+                          "strongest_language": "Python",
+                          "summary": "The candidate has 4 years of backend engineering experience building REST APIs in Python/Django and deploying on AWS. They meet the production-systems experience criterion strongly, though their years of experience fall slightly short of the stated range.",
+                          "criteria_scores": [
+                            {{"criterion": "{criteria[0]['text']}", "score": 78}}
+                          ]
+                        }}
+
+                        If skills or strongest_language cannot be found, use an empty string (""). Do NOT include an overall "score" field - that is computed separately from criteria_scores."""
+
+        user_prompt = f"""Extract the candidate's skills and strongest language, write a summary, and score the resume against each rubric criterion as per the system instructions.
+
+                        ## Job Description (context only - score against the rubric criteria, not the JD as a whole):
+                        {job_description}
+
+                        ## Resume:
+                        {resume_text}
+
+                        Output ONLY the JSON object as specified in the system prompt, with no additional text or formatting."""
+    else:
+        system_prompt = """You are a recruiter evaluating a resume against a job description.
 
                         ## Task
                         1. skills: a comma-separated list of the candidate's technical and relevant non-technical skills (explicit and reasonably inferred from their projects/roles).
@@ -305,10 +350,8 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                         }
 
                         If skills or strongest_language cannot be found, use an empty string (""), and still provide your best-effort score."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Extract the candidate's skills and strongest language, write a summary, and score the fit as per the system instructions.
+
+        user_prompt = f"""Extract the candidate's skills and strongest language, write a summary, and score the fit as per the system instructions.
 
                         ## Job Description:
                         {job_description}
@@ -317,7 +360,14 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                         {resume_text}
 
                         Output ONLY the JSON object as specified in the system prompt, with no additional text or formatting."""
-                    }
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
                 response_format={
                     "type": "json_object"
@@ -348,11 +398,41 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                 "summary": pick("summary", "recruiter_style_summary", "recruiter_summary"),
             }
 
-            # Normalize score to an int 0-100
-            try:
-                normalized["score"] = max(0, min(100, int(round(float(record.get("score", 0))))))
-            except (TypeError, ValueError):
-                normalized["score"] = 0
+            if criteria:
+                raw_scores = record.get("criteria_scores") or record.get("criterion_scores") or []
+                if not isinstance(raw_scores, list) or len(raw_scores) != len(criteria):
+                    # Model didn't return one sub-score per criterion - can't
+                    # compute a trustworthy weighted average from this, treat
+                    # as a malformed generation and retry like the empty-result case.
+                    if attempt < max_retries - 1:
+                        print(f"criteria_scores length mismatch (got {len(raw_scores) if isinstance(raw_scores, list) else 'non-list'}, expected {len(criteria)}), retrying...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print("criteria_scores length mismatch, out of retries.")
+                        return None
+
+                breakdown = []
+                weighted_sum = 0.0
+                weight_total = 0.0
+                for c, item in zip(criteria, raw_scores):
+                    try:
+                        sub_score = max(0, min(100, int(round(float(item.get("score", 0))))))
+                    except (TypeError, ValueError, AttributeError):
+                        sub_score = 0
+                    weight = float(c["weight"])
+                    breakdown.append({"criterion": c["text"], "weight": weight, "score": sub_score})
+                    weighted_sum += sub_score * weight
+                    weight_total += weight
+
+                normalized["score"] = int(round(weighted_sum / weight_total)) if weight_total > 0 else 0
+                normalized["criteria_breakdown"] = breakdown
+            else:
+                # Normalize score to an int 0-100
+                try:
+                    normalized["score"] = max(0, min(100, int(round(float(record.get("score", 0))))))
+                except (TypeError, ValueError):
+                    normalized["score"] = 0
 
             # Occasionally the model returns a technically-valid but empty
             # JSON object (no exception, no error) - all fields blank and
