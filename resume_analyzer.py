@@ -478,6 +478,20 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                 normalized["score"] = int(round(weighted_sum / weight_total)) if weight_total > 0 else 0
                 normalized["criteria_breakdown"] = breakdown
             else:
+                # If the model omitted "score" entirely (e.g. returned only a
+                # summary), defaulting to 0 would silently write a fake "this
+                # candidate scored 0" into the sheet. An absent score is a
+                # malformed generation, not a judgment - retry it. (A score the
+                # model explicitly returned as 0 is still accepted as-is.)
+                if record.get("score") is None:
+                    if attempt < max_retries - 1:
+                        print(f"Model omitted 'score' (attempt {attempt + 1}/{max_retries}), retrying...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print("Model omitted 'score', out of retries.")
+                        return None
+
                 # Normalize score to an int 0-100
                 try:
                     normalized["score"] = max(0, min(100, int(round(float(record.get("score", 0))))))

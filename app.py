@@ -603,7 +603,14 @@ with tabs[1]:
 
     if trigger:
         if not st.session_state.get("jd_input") or not sheet_url or not resume_column_name:
-            st.error("Please provide a Job Description (top of page), Sheet URL, and resume link column name.")
+            missing = []
+            if not st.session_state.get("jd_input"):
+                missing.append("Job Description (paste it in the box at the top, then click 'Analyze JD' or press Cmd/Ctrl+Enter so it registers)")
+            if not sheet_url:
+                missing.append("Google Sheet URL")
+            if not resume_column_name:
+                missing.append("resume link column name")
+            st.error("Missing: " + "; ".join(missing) + ".")
             st.stop()
 
         # Build the weighted criteria list from the editor, dropping blank/zero-weight rows.
