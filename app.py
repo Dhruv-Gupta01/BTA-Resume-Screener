@@ -11,6 +11,7 @@ import json
 # from streamlit_elements import elements, mui
 from jd_analyzer import analyze_job_description, format_requirements_for_display, parse_edited_requirements
 from resume_analyzer import analyze_resume
+from llm_config import LLM_MODEL
 
 # Sheet-based Analysis (Tab 2) scores resumes via the standalone backend API
 # deployed on Render, instead of calling the LLM in-process - this is the
@@ -34,9 +35,8 @@ if "job_description" not in st.session_state:
     st.session_state.job_description = None
 if "formatted_reqs" not in st.session_state:
     st.session_state.formatted_reqs = None
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 if "selected_models" not in st.session_state:
-    st.session_state.selected_models = {"primary": FIREWORKS_MODEL, "reasoning": FIREWORKS_MODEL}
+    st.session_state.selected_models = {"primary": LLM_MODEL, "reasoning": LLM_MODEL}
 
 def extract_text_from_pdf(pdf_file):
     text = ""
@@ -470,10 +470,10 @@ with st.expander("📝 Job Description (Required)"):
         else:
             st.error("Please paste a job description first.")
 
-# Model: single Fireworks model used for both JD analysis and resume evaluation
+# Model: single OpenAI model used for both JD analysis and resume evaluation
 st.sidebar.title("Model")
-st.sidebar.markdown(f"`{FIREWORKS_MODEL}` (Fireworks)")
-st.session_state.selected_models = {"primary": FIREWORKS_MODEL, "reasoning": FIREWORKS_MODEL}
+st.sidebar.markdown(f"`{LLM_MODEL}` (OpenAI)")
+st.session_state.selected_models = {"primary": LLM_MODEL, "reasoning": LLM_MODEL}
 
 # Tabs for workflows
 tabs = st.tabs(["📁 Upload Resumes", "📊 Sheet-based Analysis"])
@@ -544,7 +544,7 @@ with tabs[1]:
     resume_column_name = st.text_input("Column name with Resume Links", value="Resume")
     delay_seconds = st.number_input(
         "Delay between resumes (seconds)", min_value=0, max_value=120, value=3,
-        help="Fireworks has no daily token cap, just generous per-minute limits (higher still once a payment method is on file). A small delay is just a safety buffer, not a workaround for a hard ceiling."
+        help="OpenAI enforces per-minute rate limits that depend on your account tier. A small delay is just a safety buffer, not a workaround for a hard ceiling."
     )
 
     with st.expander("⚖️ Weighted Scoring Criteria (optional)"):

@@ -1,8 +1,9 @@
 import json
 import time
-from openai import OpenAI, RateLimitError, APIStatusError
+from openai import RateLimitError, APIStatusError
 from dotenv import load_dotenv
 import streamlit as st
+from llm_config import LLM_MODEL, REASONING_EFFORT, get_client
 
 # Load environment variables
 load_dotenv()
@@ -10,9 +11,7 @@ load_dotenv()
 # Initialize OpenAI client
 
 
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
-
-def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
+def analyze_resume(resume_text, requirements=None, model=LLM_MODEL):
     """
     Analyzes a resume against the structured requirements from the JD analyzer.
     Returns a comprehensive analysis including quantitative matches and qualitative assessment.
@@ -24,10 +23,9 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
             - must_have_requirements
             - good_to_have_requirements
             - additional_screening_criteria
-        model (str): The Fireworks model id to use for analysis
+        model (str): The OpenAI model id to use for analysis
     """
-    fireworks_key = st.secrets["fireworks-key"]
-    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
+    client = get_client()
     has_jd = requirements and any(k in requirements for k in [
         "original_job_description", "must_have_requirements", "good_to_have_requirements", "additional_screening_criteria"
     ])
@@ -151,7 +149,7 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="medium"
+                reasoning_effort=REASONING_EFFORT
             )
 
             # Parse the response into a dictionary
@@ -233,7 +231,7 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="medium"
+                reasoning_effort=REASONING_EFFORT
             )
 
             # Parse the response into a dictionary
@@ -251,7 +249,7 @@ def analyze_resume(resume_text, requirements=None, model=FIREWORKS_MODEL):
         print(f"Error in analyze_resume: {str(e)}")
         return None
 
-def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL, api_key=None, criteria=None, jd_weight=0):
+def analyze_resume_for_sheet(resume_text, job_description, model=LLM_MODEL, api_key=None, criteria=None, jd_weight=0):
     """
     Single-call resume evaluator - the core "score a resume against a JD"
     primitive shared by the Streamlit sheet flow and the standalone API
@@ -265,10 +263,10 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
     Args:
         resume_text (str): The text content of the resume
         job_description (str): The raw job description text
-        model (str): The Fireworks model id to use for analysis
-        api_key (str, optional): Fireworks API key. If not given, falls back
-            to st.secrets["fireworks-key"]["FIREWORKS_API_KEY"] (Streamlit
-            usage). Non-Streamlit callers (e.g. api.py) must pass this.
+        model (str): The OpenAI model id to use for analysis
+        api_key (str, optional): OpenAI API key. If not given, falls back
+            to the OPENAI_API_KEY env var, then
+            st.secrets["openai-key"]["OPENAI_API_KEY"] (Streamlit usage). Non-Streamlit callers (e.g. api.py) must pass this.
         criteria (list[dict], optional): User-defined weighted scoring
             rubric, e.g. [{"text": "4 to 7 years of experience building
             production systems, not just internal tools", "weight": 40}].
@@ -298,9 +296,7 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
         whole" entry when jd_weight > 0) that produced the final weighted
         score. Returns None on failure.
     """
-    if api_key is None:
-        api_key = st.secrets["fireworks-key"]["FIREWORKS_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://api.fireworks.ai/inference/v1")
+    client = get_client(api_key)
 
     # Drop any criteria with a non-positive weight - they'd contribute
     # nothing to the weighted average and just add prompt noise.
@@ -402,7 +398,7 @@ def analyze_resume_for_sheet(resume_text, job_description, model=FIREWORKS_MODEL
                 response_format={
                     "type": "json_object"
                 },
-                reasoning_effort="medium",
+                reasoning_effort=REASONING_EFFORT,
                 max_completion_tokens=4096
             )
 

@@ -26,7 +26,8 @@ There is no linter or automated test suite configured — `test_resume_analyzer.
 
 ## Configuration / secrets
 
-- OpenAI key: `app.py`/`jd_analyzer.py`/`resume_analyzer.py` all read it via `st.secrets["openai-key"]["OPENAI_API_KEY"]` (Streamlit secrets, i.e. `.streamlit/secrets.toml`), **not** `os.environ`, even though `load_dotenv()` is called in each module. If you touch API-key handling, keep the `st.secrets` path working since that's what's actually used at runtime.
+- Model and client: `llm_config.py` is the single place for the model (`LLM_MODEL = "gpt-6-luna"`), reasoning effort (`REASONING_EFFORT = "medium"`) and client construction (`get_client()`). `jd_analyzer.py`/`resume_analyzer.py`/`api.py` all go through it; change the model there, not at call sites. Rationale and test results: `docs/MODEL_COMPARISON.md`.
+- OpenAI key: `get_client()` reads, in order, an explicit `api_key` arg, the `OPENAI_API_KEY` env var (used by `api.py` on Render), then `st.secrets["openai-key"]["OPENAI_API_KEY"]` (Streamlit, i.e. `.streamlit/secrets.toml`). Both the Streamlit Cloud Secrets and the Render env vars need the key.
 - Google Sheets integration (`app.py` tab 2) reads a service account dict from `st.secrets["google_service_account"]` and authorizes via `oauth2client.service_account.ServiceAccountCredentials` + `gspread`.
 - `google_sheet_resume_analyzer.py` is the older/standalone variant of the same sheet workflow and instead expects a local `service_account.json` file and a hardcoded sheet URL — it does not go through Streamlit secrets. `service_account_base64.txt` and `service_account.json` are gitignored; don't commit real credentials into them.
 
@@ -45,7 +46,7 @@ Three-stage pipeline, each stage a thin wrapper around one OpenAI chat-completio
    - File text extraction: `extract_text_from_pdf` (PyPDF2), `extract_text_from_docx` (python-docx), plain `.txt` decode — dispatched via `process_file`.
    - Two tabs: **Tab 1** ("Upload Resumes") — upload files directly, analyze each against `st.session_state.requirements`, render results, offer CSV export via `flatten_analysis_for_csv`. **Tab 2** ("Sheet-based Analysis") — given a Google Sheet URL + worksheet name + a column of Google Drive resume links, downloads each PDF, runs the same `analyze_resume`, and writes `Score`/`Final Decision`/`Decision Summary`/`Resume Summary`/`Skills` back into the sheet (skipping rows that already have a `Final Decision`).
    - A pile of `display_*`/`create_*` helper functions render the nested analysis JSON as custom HTML (dark-themed `<details>` elements, colored qualitative-factor badges, contact info cards) — these are tightly coupled to the exact key names in the JSON schema produced by `resume_analyzer.py`/`jd_analyzer.py`.
-   - Model choice is user-selectable in the sidebar (`st.session_state.selected_models`): a "primary" model for JD analysis and a "reasoning" model (e.g. `o4-mini`) for resume evaluation, passed through to `analyze_job_description`/`analyze_resume`.
+   - Model is fixed (`llm_config.LLM_MODEL`) and shown read-only in the sidebar; `st.session_state.selected_models` just carries it into `analyze_job_description`/`analyze_resume`. Reasoning models count thinking tokens against `max_completion_tokens`, and `temperature` is not set for that reason.
 
 - **`google_sheet_resume_analyzer.py`** is a standalone CLI script duplicating the Tab-2 sheet workflow (imports `extract_text_from_pdf`/`extract_text_from_docx` from `app.py`, which means importing it will also execute `app.py`'s Streamlit page-config side effects). Treat it as legacy/alternate entry point, not code shared by `app.py`.
 

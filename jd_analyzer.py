@@ -1,26 +1,23 @@
 import json
-from openai import OpenAI
 import os
 from dotenv import load_dotenv
 import streamlit as st
+from llm_config import LLM_MODEL, REASONING_EFFORT, get_client
 
 
 # Load environment variables
 load_dotenv()
 
-FIREWORKS_MODEL = "accounts/fireworks/models/gpt-oss-120b"
-
-def analyze_job_description(job_description, model=FIREWORKS_MODEL):
+def analyze_job_description(job_description, model=LLM_MODEL):
     """
     Analyzes a job description using an LLM and extracts structured requirements.
     Returns a dictionary with must-have, good-to-have, and additional screening criteria.
 
     Args:
         job_description (str): The job description text to analyze
-        model (str): The Fireworks model id to use for analysis
+        model (str): The OpenAI model id to use for analysis
     """
-    fireworks_key = st.secrets["fireworks-key"]
-    client = OpenAI(api_key=fireworks_key['FIREWORKS_API_KEY'], base_url="https://api.fireworks.ai/inference/v1")
+    client = get_client()
     try:
         response = client.chat.completions.create(
             model=model,
@@ -76,8 +73,8 @@ def analyze_job_description(job_description, model=FIREWORKS_MODEL):
                     "content": f"Please extract a structured summary of the candidate requirements from the following job description. Do not add any prefixes or suffixes to the output. Directly output in JSON format.\n---\n## Job Description:\n{job_description}\n---"
                 }
             ],
-            temperature=0.19,
-            max_tokens=1147
+            reasoning_effort=REASONING_EFFORT,
+            max_completion_tokens=4096
         )
         
         # Parse the response into a dictionary
