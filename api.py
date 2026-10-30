@@ -17,10 +17,10 @@ see the conversation this was designed in for why).
 
 Required environment variables (set as the platform's env vars/secrets,
 not st.secrets - this process never touches Streamlit):
-    OPENAI_API_KEY     - the same OpenAI key used by the Streamlit app
+    ANTHROPIC_API_KEY     - the Anthropic key used by the Streamlit app
     BACKEND_API_KEY    - a separate shared secret callers must send back
                           as the X-API-Key header. Generate any long random
-                          string for this; it is NOT the OpenAI key.
+                          string for this; it is NOT the Anthropic key.
 """
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from resume_analyzer import analyze_resume_for_sheet
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY")
 MAX_CONCURRENT_CALLS = 15
 MAX_BATCH_SIZE = 100
@@ -114,8 +114,8 @@ class BatchScoreResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    """Unauthenticated liveness check - does not verify the OpenAI key works."""
-    return {"status": "ok", "openai_key_configured": bool(OPENAI_API_KEY)}
+    """Unauthenticated liveness check - does not verify the Anthropic key works."""
+    return {"status": "ok", "anthropic_key_configured": bool(ANTHROPIC_API_KEY)}
 
 
 @app.post("/score-resume", response_model=ResumeScoreResult)
@@ -133,7 +133,7 @@ def score_resume(payload: ResumeScoreRequest, x_api_key: Optional[str] = Header(
     check_auth(x_api_key)
     criteria = [c.model_dump() for c in payload.criteria] if payload.criteria else None
     result = analyze_resume_for_sheet(
-        payload.resume_text, payload.job_description, api_key=OPENAI_API_KEY,
+        payload.resume_text, payload.job_description, api_key=ANTHROPIC_API_KEY,
         criteria=criteria, jd_weight=payload.jd_weight
     )
     if result is None:
@@ -161,7 +161,7 @@ def score_resumes(payload: BatchScoreRequest, x_api_key: Optional[str] = Header(
     def _score_one(item: ResumeItem) -> BatchScoreResultItem:
         try:
             result = analyze_resume_for_sheet(
-                item.resume_text, payload.job_description, api_key=OPENAI_API_KEY,
+                item.resume_text, payload.job_description, api_key=ANTHROPIC_API_KEY,
                 criteria=criteria, jd_weight=payload.jd_weight
             )
             if result is None:

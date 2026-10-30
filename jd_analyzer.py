@@ -15,7 +15,7 @@ def analyze_job_description(job_description, model=LLM_MODEL):
 
     Args:
         job_description (str): The job description text to analyze
-        model (str): The OpenAI model id to use for analysis
+        model (str): The Claude model id to use for analysis
     """
     client = get_client()
     try:

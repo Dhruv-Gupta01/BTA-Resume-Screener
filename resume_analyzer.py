@@ -1,6 +1,6 @@
 import json
 import time
-from openai import RateLimitError, APIStatusError
+from anthropic import RateLimitError, APIStatusError
 from dotenv import load_dotenv
 import streamlit as st
 from llm_config import LLM_MODEL, REASONING_EFFORT, get_client
@@ -8,7 +8,6 @@ from llm_config import LLM_MODEL, REASONING_EFFORT, get_client
 # Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client
 
 
 def analyze_resume(resume_text, requirements=None, model=LLM_MODEL):
@@ -23,7 +22,7 @@ def analyze_resume(resume_text, requirements=None, model=LLM_MODEL):
             - must_have_requirements
             - good_to_have_requirements
             - additional_screening_criteria
-        model (str): The OpenAI model id to use for analysis
+        model (str): The Claude model id to use for analysis
     """
     client = get_client()
     has_jd = requirements and any(k in requirements for k in [
@@ -263,10 +262,10 @@ def analyze_resume_for_sheet(resume_text, job_description, model=LLM_MODEL, api_
     Args:
         resume_text (str): The text content of the resume
         job_description (str): The raw job description text
-        model (str): The OpenAI model id to use for analysis
-        api_key (str, optional): OpenAI API key. If not given, falls back
-            to the OPENAI_API_KEY env var, then
-            st.secrets["openai-key"]["OPENAI_API_KEY"] (Streamlit usage). Non-Streamlit callers (e.g. api.py) must pass this.
+        model (str): The Claude model id to use for analysis
+        api_key (str, optional): Anthropic API key. If not given, falls back
+            to the ANTHROPIC_API_KEY env var, then
+            st.secrets["anthropic-key"]["ANTHROPIC_API_KEY"] (Streamlit usage). Non-Streamlit callers (e.g. api.py) must pass this.
         criteria (list[dict], optional): User-defined weighted scoring
             rubric, e.g. [{"text": "4 to 7 years of experience building
             production systems, not just internal tools", "weight": 40}].
@@ -519,13 +518,11 @@ def analyze_resume_for_sheet(resume_text, job_description, model=LLM_MODEL, api_
             return normalized
 
         except (RateLimitError, APIStatusError) as e:
-            # Groq surfaces "tokens per minute" limits as either a 429
-            # (RateLimitError) or a 413 (plain APIStatusError) depending on
-            # whether the limit was hit before or after estimating the
-            # request - both are the same underlying rate limit, so both
-            # get the same retry/backoff treatment.
+            # Rate limits arrive as a 429 (RateLimitError), a 413 (request too
+            # large for the limit) or a 529 (Anthropic "overloaded") - all are
+            # transient capacity limits, so all get the same retry/backoff.
             status_code = getattr(e, "status_code", None)
-            is_rate_limit = isinstance(e, RateLimitError) or status_code in (429, 413)
+            is_rate_limit = isinstance(e, RateLimitError) or status_code in (429, 413, 529)
 
             if is_rate_limit and attempt < max_retries - 1:
                 wait = retry_wait_seconds * (attempt + 1)
